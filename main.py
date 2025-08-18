@@ -28,7 +28,7 @@
         self.hal_write_command(self.LCD_CGRAM | ((location & 7) << 3))
         self.hal_sleep(5)
         for i in range(8):
-            self.hal_write_data(charmap[i])
+            self.hal_write_data(haha[i])
         self.home()
 
     def print_custom_char(self, location):
