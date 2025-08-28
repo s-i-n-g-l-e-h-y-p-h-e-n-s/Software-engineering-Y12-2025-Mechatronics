@@ -4,6 +4,35 @@ import dht
 from LCD_LIBRARY import LCD_I2C
 
 # -------------------------------
+# Output Class With Logic 
+# -------------------------------
+class output:
+    # Initialisation with logic parameters
+    def __init__(self, temp_threshold, delay):
+        self.temperature_threshold = temp_threshold
+        self.delay = delay
+        self.timer = 0
+        self.on = False
+    # Check if delay time has passed
+    def checktime(self, current_time):
+        if current_time - self.timer >= self.delay:
+            return True
+        return False
+    # Activates output based on temperature
+    def checktemp(self, temperature):
+        if temperature >= self.temperature_threshold:
+            self.on = True
+        else:
+            self.on = False
+
+# -------------------------------
+# Output Instances
+# -------------------------------
+outputmotor1 = output(28, 0)
+outputmotor2 = output(28, 20000)
+outputbuzzer = output(35, 0)
+
+# -------------------------------
 # Stepper Motor Setup (Motor 1)
 # -------------------------------
 IN1 = Pin(18, Pin.OUT)
@@ -21,21 +50,19 @@ sequence = [
     [0,0,1,1],
     [0,0,0,1],
     [1,0,0,1]
-]
+] # Step sequence for stepper motor
 
 speed = 0.001  # stepper delay
 
 # -------------------------------
 # Second Motor Setup (DC Motor)
 # -------------------------------
-motor2 = Pin(16, Pin.OUT)
+motor2pin = Pin(16, Pin.OUT)
 
 # -------------------------------
 # Buzzer Setup
 # -------------------------------
-buzzer = Pin(17, Pin.OUT)
-high_temp_threshold = 30  # buzzer triggers above this temperature
-
+buzzerpin = Pin(17, Pin.OUT)
 # -------------------------------
 # DHT11 and LCD Setup
 # -------------------------------
@@ -50,32 +77,16 @@ degree_char = chr(0xDF)
 # -------------------------------
 # Main Loop Variables
 # -------------------------------
-temp_threshold = 10
 temp = 0
 hum = 0
 last_sensor_time = ticks_ms()
 sensor_interval = 2000  # 2 sec
 seq_index = 0
 
-motor1_on = False
-motor2_on = False
-motor1_on_time = 0
-motor2_delay = 20000  # 20 seconds
-
 lcd_update_needed = True
 
 while True:
     current_time = ticks_ms()
-
-    # -------------------------------
-    # Step Motor 1 continuously if ON
-    # -------------------------------
-    if motor1_on:
-        step = sequence[seq_index]
-        for i in range(4):
-            pins[i].value(step[i])
-        seq_index = (seq_index + 1) % len(sequence)
-        sleep(speed)
 
     # -------------------------------
     # Read DHT11 sensor every 2 sec
@@ -103,23 +114,34 @@ while True:
         lcd_update_needed = False
 
     # -------------------------------
-    # Motor activation logic
+    # Motor and buzzer activation logic using output class
     # -------------------------------
-    if temp > temp_threshold and not motor1_on:
-        motor1_on = True
-        motor1_on_time = ticks_ms()
-        print("Motor 1 turned ON")
+    outputmotor1.checktemp(temp)
+    outputmotor2.checktemp(temp)
+    outputbuzzer.checktemp(temp)
 
-    if motor1_on and not motor2_on:
-        if ticks_ms() - motor1_on_time >= motor2_delay:
+    # Motor 1 (Stepper)
+    if outputmotor1.on:
+        step = sequence[seq_index]
+        for i in range(4):
+            pins[i].value(step[i])
+        seq_index = (seq_index + 1) % len(sequence)
+        sleep(speed)
+        if not outputmotor1.timer:
+            outputmotor1.timer = current_time  # start timer for motor2
+
+    # Motor 2 (DC Motor)
+    if outputmotor1.on and not outputmotor2.on:
+        if outputmotor2.checktime(current_time):
+            outputmotor2.on = True
             motor2.value(1)
-            motor2_on = True
             print("Motor 2 turned ON")
 
-    # -------------------------------
-    # Buzzer activation logic
-    # -------------------------------
-    if temp >= high_temp_threshold:
-        buzzer.value(1)  # turn buzzer ON
-    else:
-        buzzer.value(0)  # turn buzzer OFF
+    if not outputmotor1.on:
+        # Reset timers and outputs if temp drops
+        outputmotor1.timer = 0
+        outputmotor2.on = False
+        motor2.value(0)
+
+    # Buzzer
+    buzzerpin.value(1 if outputbuzzer.on else 0)
