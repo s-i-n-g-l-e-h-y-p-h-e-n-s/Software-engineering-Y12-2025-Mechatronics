@@ -1,48 +1,125 @@
-
-from machine import I2C, Pin
-from LCD_LIBRARY import LCD_I2C
-import time
+from machine import Pin, I2C
+from time import sleep, ticks_ms
 import dht
+from LCD_LIBRARY import LCD_I2C
 
-# The Raspberry Pi Pico pin (GP15) connected to the DHT11 sensor
+# -------------------------------
+# Stepper Motor Setup (Motor 1)
+# -------------------------------
+IN1 = Pin(18, Pin.OUT)
+IN2 = Pin(19, Pin.OUT)
+IN3 = Pin(20, Pin.OUT)
+IN4 = Pin(21, Pin.OUT)
+pins = [IN1, IN2, IN3, IN4]
+
+sequence = [
+    [1,0,0,0],
+    [1,1,0,0],
+    [0,1,0,0],
+    [0,1,1,0],
+    [0,0,1,0],
+    [0,0,1,1],
+    [0,0,0,1],
+    [1,0,0,1]
+]
+
+speed = 0.001  # stepper delay
+
+# -------------------------------
+# Second Motor Setup (DC Motor)
+# -------------------------------
+motor2 = Pin(16, Pin.OUT)
+
+# -------------------------------
+# Buzzer Setup
+# -------------------------------
+buzzer = Pin(17, Pin.OUT)
+high_temp_threshold = 30  # buzzer triggers above this temperature
+
+# -------------------------------
+# DHT11 and LCD Setup
+# -------------------------------
 DHT11_PIN = 15
+DHT11 = dht.DHT11(Pin(DHT11_PIN))
 
-# The I2C address of your LCD (Update if different)
-I2C_ADDR = 0x27  # Use the address found using the I2C scanner
-
-# Define the number of rows and columns on your LCD
-LCD_ROWS = 2
-LCD_COLS = 16
-
-# Initialize the DHT11 sensor
-DHT11 = dht.DHT11(machine.Pin(DHT11_PIN))
-
-# Initialize I2C
 i2c = I2C(0, sda=Pin(0), scl=Pin(1), freq=400000)
-
-# Initialize LCD
-lcd = LCD_I2C(i2c, I2C_ADDR, LCD_ROWS, LCD_COLS)
-
-# Setup function
+lcd = LCD_I2C(i2c, 0x27, 2, 16)
 lcd.backlight_on()
 lcd.clear()
-
-# Custom character for the degree symbol
 degree_char = chr(0xDF)
+# -------------------------------
+# Main Loop Variables
+# -------------------------------
+temp_threshold = 10
+temp = 0
+hum = 0
+last_sensor_time = ticks_ms()
+sensor_interval = 2000  # 2 sec
+seq_index = 0
 
-# Main loop: Read data from the DHT11 sensor and display on LCD every 2 seconds
+motor1_on = False
+motor2_on = False
+motor1_on_time = 0
+motor2_delay = 20000  # 20 seconds
+
+lcd_update_needed = True
+
 while True:
-    try:
-        DHT11.measure()
-        temperature = DHT11.temperature()  # Gets the temperature in Celsius
-        humidity = DHT11.humidity()  # Gets the relative humidity in %
-        print("Temperature: {:.2f}°C, Humidity: {:.2f}%".format(temperature, humidity))
-        lcd.clear()
-        lcd.set_cursor(0, 0) # Move to the beginning of the first row
-        lcd.print("Temp: {:.2f}{}C".format(temperature, degree_char))
-        lcd.set_cursor(0, 1)  # Move to the beginning of the second row
-        lcd.print("Humi: {:.2f}%".format(humidity))
-    except OSError as e:
-        print("Failed to read from DHT11 sensor:", e)
+    current_time = ticks_ms()
 
-    time.sleep(2)
+    # -------------------------------
+    # Step Motor 1 continuously if ON
+    # -------------------------------
+    if motor1_on:
+        step = sequence[seq_index]
+        for i in range(4):
+            pins[i].value(step[i])
+        seq_index = (seq_index + 1) % len(sequence)
+        sleep(speed)
+
+    # -------------------------------
+    # Read DHT11 sensor every 2 sec
+    # -------------------------------
+    if current_time - last_sensor_time > sensor_interval:
+        try:
+            DHT11.measure()
+            temp = DHT11.temperature()
+            hum = DHT11.humidity()
+            lcd_update_needed = True
+            print("Temp: {:.2f}C, Hum: {:.2f}%".format(temp, hum))
+        except OSError:
+            print("DHT11 read error")
+        last_sensor_time = current_time
+
+    # -------------------------------
+    # Update LCD
+    # -------------------------------
+    if lcd_update_needed:
+        lcd.clear()
+        lcd.set_cursor(0, 0)
+        lcd.print("Temp: {:.2f}{}C".format(temp, degree_char))
+        lcd.set_cursor(0, 1)
+        lcd.print("Humi: {:.2f}%".format(hum))
+        lcd_update_needed = False
+
+    # -------------------------------
+    # Motor activation logic
+    # -------------------------------
+    if temp > temp_threshold and not motor1_on:
+        motor1_on = True
+        motor1_on_time = ticks_ms()
+        print("Motor 1 turned ON")
+
+    if motor1_on and not motor2_on:
+        if ticks_ms() - motor1_on_time >= motor2_delay:
+            motor2.value(1)
+            motor2_on = True
+            print("Motor 2 turned ON")
+
+    # -------------------------------
+    # Buzzer activation logic
+    # -------------------------------
+    if temp >= high_temp_threshold:
+        buzzer.value(1)  # turn buzzer ON
+    else:
+        buzzer.value(0)  # turn buzzer OFF
